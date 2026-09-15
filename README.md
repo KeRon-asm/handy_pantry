@@ -44,7 +44,7 @@ PostgreSQL via Supabase. Core tables: `users`, `pantry`, `shopping_list`, `recei
 ## Getting Started
 
 ```bash
-git clone https://github.com/yunusnetwork/handy-pantry-app
+git clone https://github.com/KeRon-asm/handy-pantry-redeploy
 cd handy-pantry-app
 npm install
 npm run dev
