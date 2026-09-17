@@ -39,7 +39,20 @@ Handy Pantry is a virtual representation of your home pantry. It lets household 
 
 ## Database
 
-PostgreSQL via Supabase. Core tables: `users`, `pantry`, `shopping_list`, `receipts`.
+PostgreSQL via Supabase. Authentication is handled by Supabase's own `auth.users`;
+application data lives in the `public` schema:
+
+| Group | Tables |
+| --- | --- |
+| Accounts | `profiles` |
+| Pantry | `pantry_items` |
+| Shopping | `shopping_lists`, `shopping_list_items` |
+| Receipts | `receipts`, `receipt_items` |
+| Recipes | `recipes` |
+| Pricing | `stores`, `product_prices`, `price_comparisons` |
+| Analytics | `spending_analytics` |
+
+Schema and seed data are versioned in [`scripts/`](scripts/), applied in filename order.
 
 ## Getting Started
 
