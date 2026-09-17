@@ -57,10 +57,10 @@ Schema and seed data are versioned in [`scripts/`](scripts/), applied in filenam
 ## Getting Started
 
 ```bash
-git clone https://github.com/KeRon-asm/handy-pantry-redeploy
-cd handy-pantry-app
-npm install
-npm run dev
+git clone https://github.com/KeRon-asm/handy_pantry
+cd handy_pantry
+pnpm install
+pnpm dev
 ```
 
 Configure your environment variables:
@@ -72,4 +72,4 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=your_anon_key
 
 ## Repository
 
-https://github.com/KeRon-asm/Handy-Pantry-Redeploy
+https://github.com/KeRon-asm/handy_pantry
