@@ -24,19 +24,18 @@ export function createClient() {
       global: {
         fetch: async (url, options = {}) => {
           try {
-            const response = await fetch(url, {
+            return await fetch(url, {
               ...options,
               // Add timeout to prevent hanging
               signal: AbortSignal.timeout(10000),
             })
-            return response
           } catch (error) {
             console.error("[v0] Supabase fetch error:", error)
-            // Return a failed response instead of throwing to prevent cascading errors
-            return new Response(JSON.stringify({ error: "Network error" }), {
-              status: 503,
-              headers: { "Content-Type": "application/json" },
-            })
+            // Rethrow so the real failure (unreachable host, timeout, blocked
+            // request) reaches the caller with a usable message. Returning a
+            // synthetic 503 here made supabase-js wrap it as an empty
+            // AuthRetryableFetchError, which rendered as a blank error to the user.
+            throw error
           }
         },
       },
