@@ -1,8 +1,8 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  eslint: {
-    ignoreDuringBuilds: true,
-  },
+  // Note: `next build` no longer runs ESLint as of Next.js 16, so the former
+  // `eslint.ignoreDuringBuilds` option has been removed (it is now an
+  // unrecognized config key). Linting is run separately via `pnpm lint`.
   typescript: {
     ignoreBuildErrors: true,
   },
