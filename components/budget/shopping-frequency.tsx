@@ -1,8 +1,9 @@
 "use client"
 
+import { useEffect, useState } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { ShoppingCart, Calendar, TrendingUp } from 'lucide-react'
-import { differenceInDays, format } from "date-fns"
+import { differenceInDays, format, parseISO } from "date-fns"
 
 interface Receipt {
   id: string
@@ -28,11 +29,11 @@ export function ShoppingFrequency({ receipts }: ShoppingFrequencyProps) {
 
     // Sort receipts by date
     const sortedReceipts = [...receipts].sort(
-      (a, b) => new Date(a.purchase_date).getTime() - new Date(b.purchase_date).getTime()
+      (a, b) => parseISO(a.purchase_date).getTime() - parseISO(b.purchase_date).getTime()
     )
 
     const totalTrips = sortedReceipts.length
-    const lastShoppingDate = new Date(sortedReceipts[sortedReceipts.length - 1].purchase_date)
+    const lastShoppingDate = parseISO(sortedReceipts[sortedReceipts.length - 1].purchase_date)
 
     if (sortedReceipts.length < 2) {
       return {
@@ -47,8 +48,8 @@ export function ShoppingFrequency({ receipts }: ShoppingFrequencyProps) {
     // Calculate days between each shopping trip
     const daysBetweenTrips = []
     for (let i = 1; i < sortedReceipts.length; i++) {
-      const prevDate = new Date(sortedReceipts[i - 1].purchase_date)
-      const currDate = new Date(sortedReceipts[i].purchase_date)
+      const prevDate = parseISO(sortedReceipts[i - 1].purchase_date)
+      const currDate = parseISO(sortedReceipts[i].purchase_date)
       const days = differenceInDays(currDate, prevDate)
       if (days > 0) daysBetweenTrips.push(days)
     }
@@ -78,9 +79,15 @@ export function ShoppingFrequency({ receipts }: ShoppingFrequencyProps) {
   }
 
   const stats = calculateFrequency()
-  const daysSinceLastShop = stats.lastShoppingDate
-    ? differenceInDays(new Date(), stats.lastShoppingDate)
-    : 0
+
+  // "N days ago" depends on the viewer's timezone, which the server can't know.
+  // Computing it during render makes the server HTML and the browser disagree
+  // (a hydration error), so compute it after mount instead.
+  const lastShopTime = stats.lastShoppingDate?.getTime() ?? null
+  const [daysSinceLastShop, setDaysSinceLastShop] = useState(0)
+  useEffect(() => {
+    setDaysSinceLastShop(lastShopTime === null ? 0 : differenceInDays(new Date(), new Date(lastShopTime)))
+  }, [lastShopTime])
 
   return (
     <Card>
@@ -105,9 +112,10 @@ export function ShoppingFrequency({ receipts }: ShoppingFrequencyProps) {
             <p className="text-sm font-medium">
               {stats.lastShoppingDate ? format(stats.lastShoppingDate, "MMM d, yyyy") : "Never"}
             </p>
-            {daysSinceLastShop > 0 && (
-              <p className="text-xs text-muted-foreground mt-0.5">{daysSinceLastShop} days ago</p>
-            )}
+            {/* Always rendered (min-h reserves the line) so nothing shifts when the value fills in after mount. */}
+            <p className="mt-0.5 min-h-4 text-xs text-muted-foreground">
+              {daysSinceLastShop > 0 ? `${daysSinceLastShop} ${daysSinceLastShop === 1 ? "day" : "days"} ago` : ""}
+            </p>
           </div>
 
           {stats.nextPredictedDate && (

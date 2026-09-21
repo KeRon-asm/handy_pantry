@@ -8,6 +8,8 @@ import { ExpirationAlerts } from "@/components/dashboard/expiration-alerts"
 import { QuickActions } from "@/components/dashboard/quick-actions"
 import { PantryLifetimeStats } from "@/components/dashboard/pantry-lifetime-stats"
 import { ShoppingFrequency } from "@/components/budget/shopping-frequency"
+import { AnimatedGrid } from "@/components/dashboard/animated-grid"
+import { getPantryStats } from "@/lib/pantry-stats"
 
 export default async function DashboardPage() {
   const supabase = await createClient()
@@ -36,16 +38,18 @@ export default async function DashboardPage() {
       .order("purchase_date", { ascending: false }),
   ])
 
+  const stats = getPantryStats(pantryItems || [], expiringItems || [])
+
   return (
     <DashboardShell displayName={profile?.display_name || "User"}>
-      <DashboardHeader displayName={profile?.display_name || "User"} email={data.user.email || ""} />
-      <div className="grid gap-3 md:gap-6 sm:grid-cols-2 lg:grid-cols-3">
-        <PantryOverview items={pantryItems || []} />
+      <DashboardHeader displayName={profile?.display_name || "User"} email={data.user.email || ""} stats={stats} />
+      <PantryOverview stats={stats} />
+      <AnimatedGrid className="grid gap-3 md:gap-6 sm:grid-cols-2" delay={0.35}>
         <PantryLifetimeStats items={pantryItems || []} />
         <ShoppingFrequency receipts={receipts || []} />
         <ExpirationAlerts items={expiringItems || []} />
         <QuickActions />
-      </div>
+      </AnimatedGrid>
     </DashboardShell>
   )
 }

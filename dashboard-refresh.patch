@@ -1,0 +1,606 @@
+diff --git a/app/dashboard/page.tsx b/app/dashboard/page.tsx
+index e04e123..65e665a 100644
+--- a/app/dashboard/page.tsx
++++ b/app/dashboard/page.tsx
+@@ -8,6 +8,8 @@ import { ExpirationAlerts } from "@/components/dashboard/expiration-alerts"
+ import { QuickActions } from "@/components/dashboard/quick-actions"
+ import { PantryLifetimeStats } from "@/components/dashboard/pantry-lifetime-stats"
+ import { ShoppingFrequency } from "@/components/budget/shopping-frequency"
++import { AnimatedGrid } from "@/components/dashboard/animated-grid"
++import { getPantryStats } from "@/lib/pantry-stats"
+ 
+ export default async function DashboardPage() {
+   const supabase = await createClient()
+@@ -36,16 +38,18 @@ export default async function DashboardPage() {
+       .order("purchase_date", { ascending: false }),
+   ])
+ 
++  const stats = getPantryStats(pantryItems || [], expiringItems || [])
++
+   return (
+     <DashboardShell displayName={profile?.display_name || "User"}>
+-      <DashboardHeader displayName={profile?.display_name || "User"} email={data.user.email || ""} />
+-      <div className="grid gap-3 md:gap-6 sm:grid-cols-2 lg:grid-cols-3">
+-        <PantryOverview items={pantryItems || []} />
++      <DashboardHeader displayName={profile?.display_name || "User"} email={data.user.email || ""} stats={stats} />
++      <PantryOverview stats={stats} />
++      <AnimatedGrid className="grid gap-3 md:gap-6 sm:grid-cols-2" delay={0.35}>
+         <PantryLifetimeStats items={pantryItems || []} />
+         <ShoppingFrequency receipts={receipts || []} />
+         <ExpirationAlerts items={expiringItems || []} />
+         <QuickActions />
+-      </div>
++      </AnimatedGrid>
+     </DashboardShell>
+   )
+ }
+diff --git a/components/budget/shopping-frequency.tsx b/components/budget/shopping-frequency.tsx
+index cb81c63..8244fc4 100644
+--- a/components/budget/shopping-frequency.tsx
++++ b/components/budget/shopping-frequency.tsx
+@@ -1,8 +1,9 @@
+ "use client"
+ 
++import { useEffect, useState } from "react"
+ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+ import { ShoppingCart, Calendar, TrendingUp } from 'lucide-react'
+-import { differenceInDays, format } from "date-fns"
++import { differenceInDays, format, parseISO } from "date-fns"
+ 
+ interface Receipt {
+   id: string
+@@ -28,11 +29,11 @@ export function ShoppingFrequency({ receipts }: ShoppingFrequencyProps) {
+ 
+     // Sort receipts by date
+     const sortedReceipts = [...receipts].sort(
+-      (a, b) => new Date(a.purchase_date).getTime() - new Date(b.purchase_date).getTime()
++      (a, b) => parseISO(a.purchase_date).getTime() - parseISO(b.purchase_date).getTime()
+     )
+ 
+     const totalTrips = sortedReceipts.length
+-    const lastShoppingDate = new Date(sortedReceipts[sortedReceipts.length - 1].purchase_date)
++    const lastShoppingDate = parseISO(sortedReceipts[sortedReceipts.length - 1].purchase_date)
+ 
+     if (sortedReceipts.length < 2) {
+       return {
+@@ -47,8 +48,8 @@ export function ShoppingFrequency({ receipts }: ShoppingFrequencyProps) {
+     // Calculate days between each shopping trip
+     const daysBetweenTrips = []
+     for (let i = 1; i < sortedReceipts.length; i++) {
+-      const prevDate = new Date(sortedReceipts[i - 1].purchase_date)
+-      const currDate = new Date(sortedReceipts[i].purchase_date)
++      const prevDate = parseISO(sortedReceipts[i - 1].purchase_date)
++      const currDate = parseISO(sortedReceipts[i].purchase_date)
+       const days = differenceInDays(currDate, prevDate)
+       if (days > 0) daysBetweenTrips.push(days)
+     }
+@@ -78,9 +79,15 @@ export function ShoppingFrequency({ receipts }: ShoppingFrequencyProps) {
+   }
+ 
+   const stats = calculateFrequency()
+-  const daysSinceLastShop = stats.lastShoppingDate
+-    ? differenceInDays(new Date(), stats.lastShoppingDate)
+-    : 0
++
++  // "N days ago" depends on the viewer's timezone, which the server can't know.
++  // Computing it during render makes the server HTML and the browser disagree
++  // (a hydration error), so compute it after mount instead.
++  const lastShopTime = stats.lastShoppingDate?.getTime() ?? null
++  const [daysSinceLastShop, setDaysSinceLastShop] = useState(0)
++  useEffect(() => {
++    setDaysSinceLastShop(lastShopTime === null ? 0 : differenceInDays(new Date(), new Date(lastShopTime)))
++  }, [lastShopTime])
+ 
+   return (
+     <Card>
+@@ -105,9 +112,10 @@ export function ShoppingFrequency({ receipts }: ShoppingFrequencyProps) {
+             <p className="text-sm font-medium">
+               {stats.lastShoppingDate ? format(stats.lastShoppingDate, "MMM d, yyyy") : "Never"}
+             </p>
+-            {daysSinceLastShop > 0 && (
+-              <p className="text-xs text-muted-foreground mt-0.5">{daysSinceLastShop} days ago</p>
+-            )}
++            {/* Always rendered (min-h reserves the line) so nothing shifts when the value fills in after mount. */}
++            <p className="mt-0.5 min-h-4 text-xs text-muted-foreground">
++              {daysSinceLastShop > 0 ? `${daysSinceLastShop} ${daysSinceLastShop === 1 ? "day" : "days"} ago` : ""}
++            </p>
+           </div>
+ 
+           {stats.nextPredictedDate && (
+diff --git a/components/dashboard/animated-grid.tsx b/components/dashboard/animated-grid.tsx
+new file mode 100644
+index 0000000..de373cb
+--- /dev/null
++++ b/components/dashboard/animated-grid.tsx
+@@ -0,0 +1,59 @@
++"use client"
++
++import { Children, type ReactNode } from "react"
++import { motion, MotionConfig, type Variants } from "motion/react"
++
++const itemVariants: Variants = {
++  hidden: { opacity: 0, y: 18 },
++  show: {
++    opacity: 1,
++    y: 0,
++    transition: { type: "spring", stiffness: 240, damping: 24 },
++  },
++}
++
++interface AnimatedGridProps {
++  children: ReactNode
++  /** Classes for the grid container itself (columns, gaps, margins). */
++  className?: string
++  /** Seconds before the first child starts animating. */
++  delay?: number
++  /** Seconds between each child's entrance. */
++  stagger?: number
++}
++
++/**
++ * Drop-in replacement for a grid <div>. Children fade and slide in one after
++ * another on mount, and lift slightly (with a soft green glow) on hover.
++ *
++ * Server components can be passed in as children, so the cards themselves stay
++ * server-rendered; only this thin wrapper ships as client JS.
++ *
++ * Honors prefers-reduced-motion: movement is disabled, and cards just fade in.
++ */
++export function AnimatedGrid({ children, className, delay = 0, stagger = 0.07 }: AnimatedGridProps) {
++  return (
++    <MotionConfig reducedMotion="user">
++      <motion.div
++        className={className}
++        initial="hidden"
++        animate="show"
++        variants={{ hidden: {}, show: { transition: { delayChildren: delay, staggerChildren: stagger } } }}
++      >
++        {Children.toArray(children).map((child, index) => (
++          <motion.div
++            key={index}
++            variants={itemVariants}
++            whileHover={{ y: -4 }}
++            transition={{ type: "spring", stiffness: 400, damping: 28 }}
++            // flex + [&>*]:flex-1 keeps each card stretching to the full row
++            // height, exactly as it did when cards were direct grid children.
++            className="flex flex-col rounded-xl transition-shadow duration-300 hover:shadow-lg hover:shadow-primary/10 [&>*]:flex-1"
++          >
++            {child}
++          </motion.div>
++        ))}
++      </motion.div>
++    </MotionConfig>
++  )
++}
+diff --git a/components/dashboard/dashboard-header.tsx b/components/dashboard/dashboard-header.tsx
+index 411dc8a..bd12325 100644
+--- a/components/dashboard/dashboard-header.tsx
++++ b/components/dashboard/dashboard-header.tsx
+@@ -1,13 +1,100 @@
++"use client"
++
++import { useEffect, useState, type ReactNode } from "react"
++import { format } from "date-fns"
++import { motion, MotionConfig } from "motion/react"
++import type { PantryStats } from "@/lib/pantry-stats"
++import { cn } from "@/lib/utils"
++
+ interface DashboardHeaderProps {
+   displayName: string
+-  email: string
++  email?: string
++  stats: Pick<PantryStats, "totalItems" | "expired" | "expiringSoon" | "lowStock">
++}
++
++function getGreeting(hour: number) {
++  if (hour < 5) return "Up late"
++  if (hour < 12) return "Good morning"
++  if (hour < 18) return "Good afternoon"
++  return "Good evening"
+ }
+ 
+-export function DashboardHeader({ displayName, email }: DashboardHeaderProps) {
++export function DashboardHeader({ displayName, stats }: DashboardHeaderProps) {
++  // The greeting and date depend on the visitor's local clock, which the server
++  // doesn't know. Render a neutral fallback first and fill them in after mount
++  // so server and client HTML match (no hydration warning).
++  const [now, setNow] = useState<Date | null>(null)
++
++  useEffect(() => {
++    setNow(new Date())
++    const id = setInterval(() => setNow(new Date()), 60_000)
++    return () => clearInterval(id)
++  }, [])
++
++  const greeting = now ? getGreeting(now.getHours()) : "Welcome back"
++
++  const { totalItems, expired, expiringSoon, lowStock } = stats
++  const segments: { text: string; className: string }[] = []
++  if (expired > 0) segments.push({ text: `${expired} expired`, className: "text-red-600 dark:text-red-400" })
++  if (expiringSoon > 0)
++    segments.push({ text: `${expiringSoon} expiring this week`, className: "text-amber-600 dark:text-amber-400" })
++  if (lowStock > 0) segments.push({ text: `${lowStock} low on stock`, className: "text-muted-foreground" })
++
++  const dot = expired > 0 ? "bg-red-500" : expiringSoon > 0 ? "bg-amber-500" : "bg-primary"
++
++  let status: ReactNode
++  if (totalItems === 0) {
++    status = "Your pantry is empty. Add your first item to get started."
++  } else if (segments.length === 0) {
++    status = "Everything is fresh and stocked. Nothing expires this week."
++  } else {
++    status = segments.map((segment, i) => (
++      <span key={segment.text}>
++        {i > 0 && <span className="text-muted-foreground"> · </span>}
++        <span className={cn("font-medium", segment.className)}>{segment.text}</span>
++      </span>
++    ))
++  }
++
+   return (
+-    <div className="mb-4 md:mb-8">
+-      <h1 className="text-2xl md:text-3xl font-bold text-foreground mb-1 md:mb-2">Welcome back, {displayName}</h1>
+-      <p className="text-sm md:text-base text-muted-foreground">Here's what's happening in your pantry today</p>
+-    </div>
++    <MotionConfig reducedMotion="user">
++      <div className="mb-4 md:mb-8">
++        <p className="mb-1 h-4 text-xs font-medium uppercase tracking-wide text-muted-foreground md:text-sm">
++          {now && (
++            <motion.span initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="inline-block">
++              {format(now, "EEEE, MMMM d")}
++            </motion.span>
++          )}
++        </p>
++
++        <h1 className="mb-1 text-2xl font-bold text-foreground md:mb-2 md:text-3xl">
++          <motion.span
++            key={greeting}
++            // Skip the animation for the server-rendered fallback; animate only
++            // when the real time-based greeting swaps in.
++            initial={now ? { opacity: 0, y: 8 } : false}
++            animate={{ opacity: 1, y: 0 }}
++            transition={{ type: "spring", stiffness: 260, damping: 24 }}
++            className="inline-block"
++          >
++            {greeting}
++          </motion.span>
++          , {displayName}
++        </h1>
++
++        <motion.p
++          initial={{ opacity: 0, y: 6 }}
++          animate={{ opacity: 1, y: 0 }}
++          transition={{ delay: 0.15, duration: 0.4 }}
++          className="flex items-center gap-2 text-sm text-muted-foreground md:text-base"
++        >
++          <span className="relative flex h-2.5 w-2.5 shrink-0" aria-hidden="true">
++            <span className={cn("absolute inline-flex h-full w-full animate-ping rounded-full opacity-60 motion-reduce:hidden", dot)} />
++            <span className={cn("relative inline-flex h-2.5 w-2.5 rounded-full", dot)} />
++          </span>
++          <span>{status}</span>
++        </motion.p>
++      </div>
++    </MotionConfig>
+   )
+ }
+diff --git a/components/dashboard/pantry-overview.tsx b/components/dashboard/pantry-overview.tsx
+index 6bb8611..070a9d2 100644
+--- a/components/dashboard/pantry-overview.tsx
++++ b/components/dashboard/pantry-overview.tsx
+@@ -1,48 +1,115 @@
+-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+-import { Package, TrendingDown } from "lucide-react"
++import Link from "next/link"
++import { AlertTriangle, Package, TrendingDown, Wallet, type LucideIcon } from "lucide-react"
++import { Card, CardContent } from "@/components/ui/card"
++import { CountUp } from "@/components/ui/count-up"
++import { HoverIcon } from "@/components/ui/hover-icon"
++import { AnimatedGrid } from "@/components/dashboard/animated-grid"
++import type { PantryStats } from "@/lib/pantry-stats"
++import { cn } from "@/lib/utils"
+ 
+-interface PantryItem {
+-  id: string
+-  name: string
+-  quantity: number
+-  expiration_date: string | null
++type Tone = "primary" | "amber" | "red"
++
++const TONES: Record<Tone, { badge: string; caption: string }> = {
++  primary: { badge: "bg-primary/10 text-primary", caption: "text-muted-foreground" },
++  amber: { badge: "bg-amber-500/10 text-amber-600 dark:text-amber-400", caption: "text-amber-600 dark:text-amber-400" },
++  red: { badge: "bg-red-500/10 text-red-600 dark:text-red-400", caption: "text-red-600 dark:text-red-400" },
++}
++
++interface Tile {
++  key: string
++  label: string
++  href: string
++  icon: LucideIcon
++  tone: Tone
++  value: number
++  decimals?: number
++  prefix?: string
++  caption: string
+ }
+ 
+ interface PantryOverviewProps {
+-  items: PantryItem[]
++  stats: PantryStats
+ }
+ 
+-export function PantryOverview({ items }: PantryOverviewProps) {
+-  const totalItems = items.length
+-  const totalQuantity = items.reduce((sum, item) => sum + Number(item.quantity), 0)
+-  const lowStockItems = items.filter((item) => Number(item.quantity) < 2).length
++export function PantryOverview({ stats }: PantryOverviewProps) {
++  const expiringTotal = stats.expired + stats.expiringSoon
++
++  const tiles: Tile[] = [
++    {
++      key: "items",
++      label: "Items",
++      href: "/dashboard/pantry",
++      icon: Package,
++      tone: "primary",
++      value: stats.totalItems,
++      caption: `Total quantity: ${Math.round(stats.totalQuantity).toLocaleString("en-US")}`,
++    },
++    {
++      key: "expiring",
++      label: "Expiring Soon",
++      href: "/dashboard/pantry",
++      icon: AlertTriangle,
++      tone: stats.expired > 0 ? "red" : expiringTotal > 0 ? "amber" : "primary",
++      value: expiringTotal,
++      caption: stats.expired > 0 ? `${stats.expired} already expired` : expiringTotal > 0 ? "Within 7 days" : "All fresh",
++    },
++    {
++      key: "low",
++      label: "Low Stock",
++      href: "/dashboard/shopping",
++      icon: TrendingDown,
++      tone: stats.lowStock > 0 ? "amber" : "primary",
++      value: stats.lowStock,
++      caption: stats.lowStock > 0 ? "Quantity under 2" : "Well stocked",
++    },
++    {
++      key: "value",
++      label: "Pantry Value",
++      href: "/dashboard/budget",
++      icon: Wallet,
++      tone: "primary",
++      value: stats.pantryValue,
++      decimals: 2,
++      prefix: "$",
++      caption: stats.totalItems > 0 ? `${stats.pricedItems} of ${stats.totalItems} items priced` : "Add items to track value",
++    },
++  ]
+ 
+   return (
+-    <Card>
+-      <CardHeader className="pb-3">
+-        <CardTitle className="flex items-center gap-2 text-base md:text-lg">
+-          <Package className="h-5 w-5" />
+-          Pantry Overview
+-        </CardTitle>
+-      </CardHeader>
+-      <CardContent>
+-        <div className="space-y-3 md:space-y-4">
+-          <div>
+-            <p className="text-xs md:text-sm text-muted-foreground">Total Items</p>
+-            <p className="text-xl md:text-2xl font-bold">{totalItems}</p>
+-          </div>
+-          <div>
+-            <p className="text-xs md:text-sm text-muted-foreground">Total Quantity</p>
+-            <p className="text-xl md:text-2xl font-bold">{totalQuantity.toFixed(0)}</p>
+-          </div>
+-          {lowStockItems > 0 && (
+-            <div className="flex items-center gap-2 text-amber-600">
+-              <TrendingDown className="h-4 w-4" />
+-              <span className="text-xs md:text-sm">{lowStockItems} low stock items</span>
+-            </div>
+-          )}
+-        </div>
+-      </CardContent>
+-    </Card>
++    <AnimatedGrid className="mb-3 md:mb-6 grid grid-cols-2 gap-3 md:gap-4 lg:grid-cols-4" stagger={0.08}>
++      {tiles.map((tile, index) => {
++        const tone = TONES[tile.tone]
++        const Icon = tile.icon
++        return (
++          <Link
++            key={tile.key}
++            href={tile.href}
++            className="group block rounded-xl outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
++          >
++            <Card className="h-full gap-3 py-4 md:py-5">
++              <CardContent className="px-4 md:px-5">
++                <div className="flex items-center justify-between gap-2">
++                  <p className="text-xs md:text-sm text-muted-foreground">{tile.label}</p>
++                  <span className={cn("flex h-8 w-8 shrink-0 items-center justify-center rounded-lg", tone.badge)}>
++                    <HoverIcon>
++                      <Icon className="h-4 w-4" />
++                    </HoverIcon>
++                  </span>
++                </div>
++                <p className="mt-2 text-2xl md:text-3xl font-bold tabular-nums">
++                  <CountUp
++                    value={tile.value}
++                    decimals={tile.decimals}
++                    prefix={tile.prefix}
++                    delay={0.15 + index * 0.08}
++                  />
++                </p>
++                <p className={cn("mt-1 text-xs", tone.caption)}>{tile.caption}</p>
++              </CardContent>
++            </Card>
++          </Link>
++        )
++      })}
++    </AnimatedGrid>
+   )
+ }
+diff --git a/components/ui/count-up.tsx b/components/ui/count-up.tsx
+new file mode 100644
+index 0000000..4245dbc
+--- /dev/null
++++ b/components/ui/count-up.tsx
+@@ -0,0 +1,91 @@
++"use client"
++
++import { useEffect, useRef } from "react"
++import { animate, useInView, useReducedMotion } from "motion/react"
++
++interface CountUpProps {
++  value: number
++  decimals?: number
++  prefix?: string
++  suffix?: string
++  /** Seconds the count takes. */
++  duration?: number
++  /** Seconds to wait before counting, handy for syncing with an entrance animation. */
++  delay?: number
++  className?: string
++}
++
++// Fixed locale on purpose: the server and the browser must format identically,
++// otherwise React reports a hydration mismatch (e.g. "1,234.50" vs "1.234,50").
++function formatNumber(value: number, decimals: number) {
++  return value.toLocaleString("en-US", {
++    minimumFractionDigits: decimals,
++    maximumFractionDigits: decimals,
++  })
++}
++
++/**
++ * Number that counts up from 0 when it scrolls into view.
++ *
++ * The DOM text is updated directly on every animation frame instead of going
++ * through React state, so a count-up doesn't re-render the component 60x/sec.
++ * When the value changes later (e.g. after a data refresh) it counts from the
++ * number currently on screen rather than restarting at 0.
++ */
++export function CountUp({
++  value,
++  decimals = 0,
++  prefix = "",
++  suffix = "",
++  duration = 1.1,
++  delay = 0,
++  className,
++}: CountUpProps) {
++  const ref = useRef<HTMLSpanElement>(null)
++  const current = useRef(0)
++  const inView = useInView(ref, { once: true })
++  const reduceMotion = useReducedMotion()
++
++  useEffect(() => {
++    const node = ref.current
++    if (!node) return
++
++    const render = (n: number) => {
++      node.textContent = `${prefix}${formatNumber(n, decimals)}${suffix}`
++    }
++
++    if (reduceMotion) {
++      current.current = value
++      render(value)
++      return
++    }
++    if (!inView) return
++
++    const controls = animate(current.current, value, {
++      duration,
++      delay,
++      ease: "easeOut",
++      onUpdate: (n) => {
++        current.current = n
++        render(n)
++      },
++      onComplete: () => {
++        current.current = value
++        render(value)
++      },
++    })
++    return () => controls.stop()
++  }, [inView, value, decimals, prefix, suffix, duration, delay, reduceMotion])
++
++  const finalText = `${prefix}${formatNumber(value, decimals)}${suffix}`
++
++  return (
++    <>
++      {/* Screen readers get the final value immediately; the animated copy is hidden from them. */}
++      <span className="sr-only">{finalText}</span>
++      <span ref={ref} aria-hidden="true" className={className}>
++        {`${prefix}${formatNumber(0, decimals)}${suffix}`}
++      </span>
++    </>
++  )
++}
+diff --git a/lib/pantry-stats.ts b/lib/pantry-stats.ts
+new file mode 100644
+index 0000000..198f915
+--- /dev/null
++++ b/lib/pantry-stats.ts
+@@ -0,0 +1,60 @@
++export interface StatsItem {
++  quantity: number | string
++  price?: number | string | null
++  expiration_date: string | null
++}
++
++export interface PantryStats {
++  totalItems: number
++  totalQuantity: number
++  /** Items with quantity under 2 (same threshold the old overview card used). */
++  lowStock: number
++  /** Items already past their expiration date. */
++  expired: number
++  /** Items expiring within the query window that have NOT expired yet. */
++  expiringSoon: number
++  /** How many items have a price recorded. */
++  pricedItems: number
++  /** Sum of `price`. Receipts store the line total (not per-unit), so no quantity multiply. */
++  pantryValue: number
++}
++
++/**
++ * Compute all dashboard numbers in one place so the header and the stat tiles
++ * can never disagree. Call this from a server component and pass the result
++ * down as plain numbers: that avoids server/client `Date` mismatches (and the
++ * resulting hydration warnings) that computing "now" inside client components
++ * would cause.
++ *
++ * `expiringItems` is the dashboard's existing "expires within 7 days, or already
++ * expired" query result. "Expired" uses the same comparison as ExpirationAlerts,
++ * so the two never show different numbers on the same page.
++ */
++export function getPantryStats(items: StatsItem[], expiringItems: StatsItem[]): PantryStats {
++  const now = new Date()
++
++  const expired = expiringItems.filter(
++    (item) => item.expiration_date && new Date(item.expiration_date) < now,
++  ).length
++
++  let pricedItems = 0
++  let pantryValue = 0
++  for (const item of items) {
++    if (item.price === null || item.price === undefined) continue
++    const price = Number(item.price)
++    if (Number.isFinite(price)) {
++      pricedItems += 1
++      pantryValue += price
++    }
++  }
++
++  return {
++    totalItems: items.length,
++    totalQuantity: items.reduce((sum, item) => sum + (Number(item.quantity) || 0), 0),
++    lowStock: items.filter((item) => Number(item.quantity) < 2).length,
++    expired,
++    expiringSoon: expiringItems.length - expired,
++    pricedItems,
++    pantryValue,
++  }
++}
