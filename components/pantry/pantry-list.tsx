@@ -1,6 +1,7 @@
 "use client"
 
-import { useState } from "react"
+import { useEffect, useState } from "react"
+import { useSearchParams } from "next/navigation"
 import { Card, CardContent } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
@@ -25,18 +26,36 @@ interface PantryListProps {
   initialItems: PantryItem[]
 }
 
+/** Same fallback label the dashboard's category donut uses, so a blank/missing
+ *  category reads consistently everywhere and never reaches Radix's Select
+ *  (which throws on an empty-string item value). */
+function normalizeCategory(category: string | null | undefined): string {
+  return category?.trim() || "Uncategorized"
+}
+
 export function PantryList({ initialItems }: PantryListProps) {
+  const searchParams = useSearchParams()
   const [items, setItems] = useState(initialItems)
   const [searchQuery, setSearchQuery] = useState("")
-  const [categoryFilter, setCategoryFilter] = useState<string>("all")
+  // Pre-filtered when arriving from a link like /dashboard/pantry?category=Dairy
+  // (the dashboard's category donut links here).
+  const [categoryFilter, setCategoryFilter] = useState<string>(() => searchParams.get("category") || "all")
   const [sortBy, setSortBy] = useState<string>("recent")
 
-  const categories = ["all", ...Array.from(new Set(items.map((item) => item.category)))]
+  // The pantry page itself doesn't remount on a query-only navigation, so pick
+  // up further changes to `?category=` (e.g. clicking a different slice while
+  // already on this page) after the initial mount too.
+  useEffect(() => {
+    const category = searchParams.get("category")
+    if (category) setCategoryFilter(category)
+  }, [searchParams])
+
+  const categories = ["all", ...Array.from(new Set(items.map((item) => normalizeCategory(item.category))))]
 
   const filteredItems = items
     .filter((item) => {
       const matchesSearch = item.name.toLowerCase().includes(searchQuery.toLowerCase())
-      const matchesCategory = categoryFilter === "all" || item.category === categoryFilter
+      const matchesCategory = categoryFilter === "all" || normalizeCategory(item.category) === categoryFilter
       return matchesSearch && matchesCategory
     })
     .sort((a, b) => {

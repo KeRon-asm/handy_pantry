@@ -1,0 +1,323 @@
+diff --git a/app/dashboard/page.tsx b/app/dashboard/page.tsx
+index 65e665a..dfe43bb 100644
+--- a/app/dashboard/page.tsx
++++ b/app/dashboard/page.tsx
+@@ -9,7 +9,8 @@ import { QuickActions } from "@/components/dashboard/quick-actions"
+ import { PantryLifetimeStats } from "@/components/dashboard/pantry-lifetime-stats"
+ import { ShoppingFrequency } from "@/components/budget/shopping-frequency"
+ import { AnimatedGrid } from "@/components/dashboard/animated-grid"
+-import { getPantryStats } from "@/lib/pantry-stats"
++import { CategoryDonut } from "@/components/dashboard/category-donut"
++import { getCategoryBreakdown, getPantryStats } from "@/lib/pantry-stats"
+ 
+ export default async function DashboardPage() {
+   const supabase = await createClient()
+@@ -39,12 +40,16 @@ export default async function DashboardPage() {
+   ])
+ 
+   const stats = getPantryStats(pantryItems || [], expiringItems || [])
++  const categoryBreakdown = getCategoryBreakdown(pantryItems || [])
+ 
+   return (
+     <DashboardShell displayName={profile?.display_name || "User"}>
+       <DashboardHeader displayName={profile?.display_name || "User"} email={data.user.email || ""} stats={stats} />
+       <PantryOverview stats={stats} />
+-      <AnimatedGrid className="grid gap-3 md:gap-6 sm:grid-cols-2" delay={0.35}>
++      <AnimatedGrid className="mb-3 grid grid-cols-1 md:mb-6" delay={0.3}>
++        <CategoryDonut breakdown={categoryBreakdown} />
++      </AnimatedGrid>
++      <AnimatedGrid className="grid gap-3 md:gap-6 sm:grid-cols-2" delay={0.42}>
+         <PantryLifetimeStats items={pantryItems || []} />
+         <ShoppingFrequency receipts={receipts || []} />
+         <ExpirationAlerts items={expiringItems || []} />
+diff --git a/app/globals.css b/app/globals.css
+index 22197ce..d02328d 100644
+--- a/app/globals.css
++++ b/app/globals.css
+@@ -28,6 +28,12 @@
+   --chart-3: oklch(0.5 0.18 170);
+   --chart-4: oklch(0.65 0.1 160);
+   --chart-5: oklch(0.45 0.2 150);
++  --chart-6: oklch(0.72 0.13 135);
++  --chart-7: oklch(0.4 0.14 175);
++  --chart-8: oklch(0.78 0.08 165);
++  --chart-9: oklch(0.35 0.1 145);
++  --chart-10: oklch(0.6 0.19 125);
++  --chart-11: oklch(0.85 0.05 158);
+   --radius: 0.5rem;
+   --sidebar: oklch(0.985 0 0);
+   --sidebar-foreground: oklch(0.145 0 0);
+@@ -64,6 +70,12 @@
+   --chart-3: oklch(0.6 0.18 170);
+   --chart-4: oklch(0.75 0.1 160);
+   --chart-5: oklch(0.55 0.2 150);
++  --chart-6: oklch(0.8 0.13 135);
++  --chart-7: oklch(0.5 0.14 175);
++  --chart-8: oklch(0.85 0.08 165);
++  --chart-9: oklch(0.45 0.1 145);
++  --chart-10: oklch(0.68 0.19 125);
++  --chart-11: oklch(0.9 0.05 158);
+   --sidebar: oklch(0.205 0 0);
+   --sidebar-foreground: oklch(0.985 0 0);
+   --sidebar-primary: oklch(0.488 0.243 264.376);
+@@ -102,6 +114,12 @@
+   --color-chart-3: var(--chart-3);
+   --color-chart-4: var(--chart-4);
+   --color-chart-5: var(--chart-5);
++  --color-chart-6: var(--chart-6);
++  --color-chart-7: var(--chart-7);
++  --color-chart-8: var(--chart-8);
++  --color-chart-9: var(--chart-9);
++  --color-chart-10: var(--chart-10);
++  --color-chart-11: var(--chart-11);
+   --radius-sm: calc(var(--radius) - 4px);
+   --radius-md: calc(var(--radius) - 2px);
+   --radius-lg: var(--radius);
+diff --git a/components/dashboard/category-donut.tsx b/components/dashboard/category-donut.tsx
+new file mode 100644
+index 0000000..9750ffb
+--- /dev/null
++++ b/components/dashboard/category-donut.tsx
+@@ -0,0 +1,129 @@
++"use client"
++
++import { useMemo, useState } from "react"
++import { useRouter } from "next/navigation"
++import { Cell, Pie, PieChart, ResponsiveContainer } from "recharts"
++import { Boxes } from "lucide-react"
++import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
++import { CHART_COLOR_COUNT, type CategorySlice } from "@/lib/pantry-stats"
++import { cn } from "@/lib/utils"
++
++interface CategoryDonutProps {
++  breakdown: CategorySlice[]
++}
++
++/**
++ * Donut chart of pantry items by category. Hovering a slice (or its legend
++ * row) highlights it and shows its name/count in the center; clicking either
++ * jumps to the pantry page pre-filtered to that category via a `?category=`
++ * query param (read by PantryList).
++ */
++export function CategoryDonut({ breakdown }: CategoryDonutProps) {
++  const router = useRouter()
++  const [activeIndex, setActiveIndex] = useState<number | null>(null)
++
++  const totalItems = useMemo(() => breakdown.reduce((sum, slice) => sum + slice.count, 0), [breakdown])
++
++  const data = useMemo(
++    () =>
++      breakdown.map((slice, index) => ({
++        ...slice,
++        color: `var(--chart-${(index % CHART_COLOR_COUNT) + 1})`,
++      })),
++    [breakdown],
++  )
++
++  const goToCategory = (category: string) => {
++    router.push(`/dashboard/pantry?category=${encodeURIComponent(category)}`)
++  }
++
++  const active = activeIndex !== null ? data[activeIndex] : null
++
++  if (totalItems === 0) {
++    return (
++      <Card>
++        <CardHeader>
++          <CardTitle className="text-base md:text-lg">By Category</CardTitle>
++        </CardHeader>
++        <CardContent className="flex flex-col items-center justify-center gap-2 py-10 text-center">
++          <Boxes className="h-8 w-8 text-muted-foreground/50" />
++          <p className="text-sm text-muted-foreground">Add items to see your pantry broken down by category.</p>
++        </CardContent>
++      </Card>
++    )
++  }
++
++  return (
++    <Card>
++      <CardHeader>
++        <CardTitle className="text-base md:text-lg">By Category</CardTitle>
++        <p className="text-sm text-muted-foreground">Hover a slice, or click to jump to that filter</p>
++      </CardHeader>
++      <CardContent>
++        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:gap-6">
++          <div className="relative mx-auto h-[200px] w-[200px] shrink-0 md:h-[220px] md:w-[220px]">
++            <ResponsiveContainer width="100%" height="100%">
++              <PieChart>
++                <Pie
++                  data={data}
++                  dataKey="count"
++                  nameKey="category"
++                  innerRadius="62%"
++                  outerRadius="100%"
++                  paddingAngle={data.length > 1 ? 2 : 0}
++                  stroke="none"
++                  isAnimationActive
++                  animationDuration={700}
++                  animationEasing="ease-out"
++                  onMouseEnter={(_, index) => setActiveIndex(index)}
++                  onMouseLeave={() => setActiveIndex(null)}
++                  onClick={(entry) => goToCategory(entry.category as string)}
++                >
++                  {data.map((slice, index) => (
++                    <Cell
++                      key={slice.category}
++                      fill={slice.color}
++                      style={{
++                        cursor: "pointer",
++                        opacity: activeIndex === null || activeIndex === index ? 1 : 0.35,
++                        transition: "opacity 150ms ease",
++                      }}
++                    />
++                  ))}
++                </Pie>
++              </PieChart>
++            </ResponsiveContainer>
++            {/* Center label: hovered slice, or the grand total by default. */}
++            <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center px-4">
++              <p className="text-2xl font-bold tabular-nums md:text-3xl">{active ? active.count : totalItems}</p>
++              <p className="max-w-[120px] truncate text-center text-xs text-muted-foreground">
++                {active ? active.category : totalItems === 1 ? "item" : "items"}
++              </p>
++            </div>
++          </div>
++
++          <div className="grid flex-1 grid-cols-1 gap-0.5 sm:grid-cols-2">
++            {data.map((slice, index) => (
++              <button
++                key={slice.category}
++                type="button"
++                onMouseEnter={() => setActiveIndex(index)}
++                onMouseLeave={() => setActiveIndex(null)}
++                onClick={() => goToCategory(slice.category)}
++                className={cn(
++                  "flex items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm outline-none transition-colors",
++                  "focus-visible:ring-2 focus-visible:ring-ring/60",
++                  activeIndex === index ? "bg-muted" : "hover:bg-muted/60",
++                )}
++              >
++                <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: slice.color }} />
++                <span className="flex-1 truncate">{slice.category}</span>
++                <span className="text-muted-foreground tabular-nums">{slice.count}</span>
++              </button>
++            ))}
++          </div>
++        </div>
++      </CardContent>
++    </Card>
++  )
++}
+diff --git a/components/pantry/pantry-item-card.tsx b/components/pantry/pantry-item-card.tsx
+index 79884f3..f4bf3e0 100644
+--- a/components/pantry/pantry-item-card.tsx
++++ b/components/pantry/pantry-item-card.tsx
+@@ -70,7 +70,7 @@ export function PantryItemCard({ item, onDelete }: PantryItemCardProps) {
+           <div className="flex-1 min-w-0">
+             <h3 className="font-semibold text-base md:text-lg mb-1 truncate">{item.name}</h3>
+             <Badge variant="outline" className="text-xs">
+-              {item.category}
++              {item.category?.trim() || "Uncategorized"}
+             </Badge>
+           </div>
+           {item.is_favorite && <Star className="h-4 w-4 text-yellow-500 fill-yellow-500 flex-shrink-0 ml-2" />}
+diff --git a/components/pantry/pantry-list.tsx b/components/pantry/pantry-list.tsx
+index ebde22e..874c3b8 100644
+--- a/components/pantry/pantry-list.tsx
++++ b/components/pantry/pantry-list.tsx
+@@ -1,6 +1,7 @@
+ "use client"
+ 
+-import { useState } from "react"
++import { useEffect, useState } from "react"
++import { useSearchParams } from "next/navigation"
+ import { Card, CardContent } from "@/components/ui/card"
+ import { Input } from "@/components/ui/input"
+ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+@@ -25,18 +26,36 @@ interface PantryListProps {
+   initialItems: PantryItem[]
+ }
+ 
++/** Same fallback label the dashboard's category donut uses, so a blank/missing
++ *  category reads consistently everywhere and never reaches Radix's Select
++ *  (which throws on an empty-string item value). */
++function normalizeCategory(category: string | null | undefined): string {
++  return category?.trim() || "Uncategorized"
++}
++
+ export function PantryList({ initialItems }: PantryListProps) {
++  const searchParams = useSearchParams()
+   const [items, setItems] = useState(initialItems)
+   const [searchQuery, setSearchQuery] = useState("")
+-  const [categoryFilter, setCategoryFilter] = useState<string>("all")
++  // Pre-filtered when arriving from a link like /dashboard/pantry?category=Dairy
++  // (the dashboard's category donut links here).
++  const [categoryFilter, setCategoryFilter] = useState<string>(() => searchParams.get("category") || "all")
+   const [sortBy, setSortBy] = useState<string>("recent")
+ 
+-  const categories = ["all", ...Array.from(new Set(items.map((item) => item.category)))]
++  // The pantry page itself doesn't remount on a query-only navigation, so pick
++  // up further changes to `?category=` (e.g. clicking a different slice while
++  // already on this page) after the initial mount too.
++  useEffect(() => {
++    const category = searchParams.get("category")
++    if (category) setCategoryFilter(category)
++  }, [searchParams])
++
++  const categories = ["all", ...Array.from(new Set(items.map((item) => normalizeCategory(item.category))))]
+ 
+   const filteredItems = items
+     .filter((item) => {
+       const matchesSearch = item.name.toLowerCase().includes(searchQuery.toLowerCase())
+-      const matchesCategory = categoryFilter === "all" || item.category === categoryFilter
++      const matchesCategory = categoryFilter === "all" || normalizeCategory(item.category) === categoryFilter
+       return matchesSearch && matchesCategory
+     })
+     .sort((a, b) => {
+diff --git a/lib/pantry-stats.ts b/lib/pantry-stats.ts
+index 198f915..627e627 100644
+--- a/lib/pantry-stats.ts
++++ b/lib/pantry-stats.ts
+@@ -4,6 +4,20 @@ export interface StatsItem {
+   expiration_date: string | null
+ }
+ 
++export interface CategoryItem {
++  category: string | null
++}
++
++export interface CategorySlice {
++  category: string
++  count: number
++  /** Share of all items, 0-1. */
++  share: number
++}
++
++/** The 11 CSS chart color slots defined in globals.css, cycled if there are more categories than colors. */
++export const CHART_COLOR_COUNT = 11
++
+ export interface PantryStats {
+   totalItems: number
+   totalQuantity: number
+@@ -58,3 +72,21 @@ export function getPantryStats(items: StatsItem[], expiringItems: StatsItem[]):
+     pantryValue,
+   }
+ }
++
++/**
++ * Group items by `category` for the dashboard donut. Sorted by count
++ * descending so the biggest slice is always first (chart-1's color).
++ * Items with a missing/blank category are grouped under "Uncategorized".
++ */
++export function getCategoryBreakdown(items: CategoryItem[]): CategorySlice[] {
++  const counts = new Map<string, number>()
++  for (const item of items) {
++    const category = item.category?.trim() || "Uncategorized"
++    counts.set(category, (counts.get(category) || 0) + 1)
++  }
++
++  const total = items.length || 1
++  return Array.from(counts.entries())
++    .map(([category, count]) => ({ category, count, share: count / total }))
++    .sort((a, b) => b.count - a.count)
++}

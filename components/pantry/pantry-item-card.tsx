@@ -70,7 +70,7 @@ export function PantryItemCard({ item, onDelete }: PantryItemCardProps) {
           <div className="flex-1 min-w-0">
             <h3 className="font-semibold text-base md:text-lg mb-1 truncate">{item.name}</h3>
             <Badge variant="outline" className="text-xs">
-              {item.category}
+              {item.category?.trim() || "Uncategorized"}
             </Badge>
           </div>
           {item.is_favorite && <Star className="h-4 w-4 text-yellow-500 fill-yellow-500 flex-shrink-0 ml-2" />}

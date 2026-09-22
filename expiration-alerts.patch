@@ -1,0 +1,477 @@
+diff --git a/app/dashboard/page.tsx b/app/dashboard/page.tsx
+index dfe43bb..8b2c22f 100644
+--- a/app/dashboard/page.tsx
++++ b/app/dashboard/page.tsx
+@@ -10,7 +10,7 @@ import { PantryLifetimeStats } from "@/components/dashboard/pantry-lifetime-stat
+ import { ShoppingFrequency } from "@/components/budget/shopping-frequency"
+ import { AnimatedGrid } from "@/components/dashboard/animated-grid"
+ import { CategoryDonut } from "@/components/dashboard/category-donut"
+-import { getCategoryBreakdown, getPantryStats } from "@/lib/pantry-stats"
++import { getCategoryBreakdown, getExpirationAlerts, getPantryStats } from "@/lib/pantry-stats"
+ 
+ export default async function DashboardPage() {
+   const supabase = await createClient()
+@@ -41,6 +41,7 @@ export default async function DashboardPage() {
+ 
+   const stats = getPantryStats(pantryItems || [], expiringItems || [])
+   const categoryBreakdown = getCategoryBreakdown(pantryItems || [])
++  const expirationAlerts = getExpirationAlerts(expiringItems || [])
+ 
+   return (
+     <DashboardShell displayName={profile?.display_name || "User"}>
+@@ -52,7 +53,7 @@ export default async function DashboardPage() {
+       <AnimatedGrid className="grid gap-3 md:gap-6 sm:grid-cols-2" delay={0.42}>
+         <PantryLifetimeStats items={pantryItems || []} />
+         <ShoppingFrequency receipts={receipts || []} />
+-        <ExpirationAlerts items={expiringItems || []} />
++        <ExpirationAlerts items={expirationAlerts} />
+         <QuickActions />
+       </AnimatedGrid>
+     </DashboardShell>
+diff --git a/app/dashboard/recipes/page.tsx b/app/dashboard/recipes/page.tsx
+index fe17474..96f6680 100644
+--- a/app/dashboard/recipes/page.tsx
++++ b/app/dashboard/recipes/page.tsx
+@@ -6,9 +6,14 @@ import { RecipesHeader } from "@/components/recipes/recipes-header"
+ import { RecipesList } from "@/components/recipes/recipes-list"
+ import { RecipeGenerator } from "@/components/recipes/recipe-generator"
+ 
+-export default async function RecipesPage() {
++export default async function RecipesPage({
++  searchParams,
++}: {
++  searchParams: Promise<{ use?: string }>
++}) {
+   const { user, profile, displayName } = await getUserProfile()
+   const adminSupabase = createAdminClient()
++  const { use } = await searchParams
+ 
+   const [{ data: recipes }, { data: pantryItems }] = await Promise.all([
+     adminSupabase.from("recipes").select("*").eq("user_id", user.id).order("created_at", { ascending: false }),
+@@ -22,6 +27,7 @@ export default async function RecipesPage() {
+         pantryItems={pantryItems || []}
+         dietaryRestrictions={profile?.dietary_restrictions || []}
+         userId={user.id}
++        initialRequest={use ? `Use up my ${use}` : undefined}
+       />
+       <RecipesList initialRecipes={recipes || []} />
+     </DashboardShell>
+diff --git a/app/layout.tsx b/app/layout.tsx
+index 29dd491..315c61a 100644
+--- a/app/layout.tsx
++++ b/app/layout.tsx
+@@ -2,6 +2,7 @@ import type React from "react"
+ import type { Metadata, Viewport } from "next"
+ import { Geist, Geist_Mono } from "next/font/google"
+ import { Analytics } from "@vercel/analytics/next"
++import { Toaster } from "sonner"
+ import "./globals.css"
+ 
+ const _geist = Geist({ subsets: ["latin"] })
+@@ -50,6 +51,9 @@ export default function RootLayout({
+     <html lang="en">
+       <body className={`font-sans antialiased touch-manipulation`}>
+         {children}
++        {/* Mounted once, app-wide: every existing toast.*() call in the app (12
++            files already call it) had nowhere to render without this. */}
++        <Toaster richColors closeButton position="bottom-right" theme="system" />
+         <Analytics />
+       </body>
+     </html>
+diff --git a/components/dashboard/expiration-alerts.tsx b/components/dashboard/expiration-alerts.tsx
+index 8a75a6f..65652d4 100644
+--- a/components/dashboard/expiration-alerts.tsx
++++ b/components/dashboard/expiration-alerts.tsx
+@@ -1,63 +1,230 @@
++"use client"
++
++import { useState } from "react"
++import { useRouter } from "next/navigation"
++import { AnimatePresence, motion, MotionConfig } from "motion/react"
++import { AlertTriangle, Check, ChefHat, PartyPopper } from "lucide-react"
++import { toast } from "sonner"
+ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+-import { AlertTriangle, Calendar } from "lucide-react"
+-import { formatDistanceToNow } from "date-fns"
++import { Button } from "@/components/ui/button"
++import { createClient } from "@/lib/supabase/client"
++import type { ExpirationAlert, ExpirationUrgency } from "@/lib/pantry-stats"
++import { cn } from "@/lib/utils"
+ 
+-interface PantryItem {
++/** The full pantry_items row, so "Undo" can re-insert exactly what was removed. */
++interface PantryItemRow {
+   id: string
+   name: string
+-  expiration_date: string | null
+   quantity: number
++  unit: string
++  expiration_date: string | null
++  [key: string]: unknown
+ }
+ 
++type AlertItem = ExpirationAlert<PantryItemRow>
++
++const URGENCY_STYLES: Record<ExpirationUrgency, { pill: string; badge: string; icon: string }> = {
++  expired: {
++    pill: "bg-red-500/10 text-red-600 dark:text-red-400",
++    badge: "bg-red-500/15 text-red-600 dark:text-red-400",
++    icon: "text-red-500",
++  },
++  critical: {
++    pill: "bg-orange-500/10 text-orange-600 dark:text-orange-400",
++    badge: "bg-orange-500/15 text-orange-600 dark:text-orange-400",
++    icon: "text-orange-500",
++  },
++  warning: {
++    pill: "bg-amber-500/10 text-amber-600 dark:text-amber-400",
++    badge: "bg-amber-500/15 text-amber-600 dark:text-amber-400",
++    icon: "text-amber-500",
++  },
++  notice: {
++    pill: "bg-muted text-muted-foreground",
++    badge: "bg-muted text-muted-foreground",
++    icon: "text-muted-foreground",
++  },
++}
++
++const VISIBLE_LIMIT = 5
++
+ interface ExpirationAlertsProps {
+-  items: PantryItem[]
++  items: AlertItem[]
+ }
+ 
++/**
++ * Dashboard card for items expiring soon. Each row shows a color-coded
++ * urgency pill and a days-left badge, plus two actions: "Use in recipe"
++ * (jumps to the recipe generator with this item pre-filled) and "Mark used"
++ * (deletes the pantry row, animates the row out, and offers an Undo toast
++ * that re-inserts the exact row if clicked).
++ *
++ * `items` arrives already enriched by `getExpirationAlerts` on the server —
++ * this component never computes a date or "now" itself, so it can't produce
++ * the server/client hydration mismatches documented elsewhere in this app.
++ */
+ export function ExpirationAlerts({ items }: ExpirationAlertsProps) {
+-  if (items.length === 0) {
+-    return (
++  const router = useRouter()
++  const [alerts, setAlerts] = useState(items)
++  const [pendingIds, setPendingIds] = useState<Set<string>>(new Set())
++  const hadItemsInitially = items.length > 0
++
++  const setPending = (id: string, isPending: boolean) => {
++    setPendingIds((prev) => {
++      const next = new Set(prev)
++      if (isPending) next.add(id)
++      else next.delete(id)
++      return next
++    })
++  }
++
++  const handleUseInRecipe = (item: AlertItem) => {
++    router.push(`/dashboard/recipes?use=${encodeURIComponent(item.name)}`)
++  }
++
++  const handleMarkUsed = async (item: AlertItem) => {
++    if (pendingIds.has(item.id)) return
++    setPending(item.id, true)
++
++    // Optimistic removal — AnimatePresence below animates the row out.
++    setAlerts((prev) => prev.filter((a) => a.id !== item.id))
++
++    const supabase = createClient()
++    const { error } = await supabase.from("pantry_items").delete().eq("id", item.id)
++    setPending(item.id, false)
++
++    if (error) {
++      // Put it back: the delete never happened.
++      setAlerts((prev) => [...prev, item].sort((a, b) => a.daysUntil - b.daysUntil))
++      toast.error(`Couldn't mark "${item.name}" as used`, { description: error.message })
++      return
++    }
++
++    toast(`Marked "${item.name}" as used`, {
++      description: "Removed from your pantry.",
++      duration: 6000,
++      action: {
++        label: "Undo",
++        onClick: async () => {
++          // Strip the derived (non-column) fields before writing the row back.
++          const { daysUntil, urgency, pillLabel, ...row } = item
++          const { error: insertError } = await supabase.from("pantry_items").insert(row)
++          if (insertError) {
++            toast.error(`Couldn't restore "${item.name}"`, { description: insertError.message })
++            return
++          }
++          setAlerts((prev) => [...prev, item].sort((a, b) => a.daysUntil - b.daysUntil))
++          toast.success(`Restored "${item.name}"`)
++        },
++      },
++    })
++  }
++
++  const visible = alerts.slice(0, VISIBLE_LIMIT)
++  const overflow = alerts.length - visible.length
++
++  return (
++    <MotionConfig reducedMotion="user">
+       <Card>
+         <CardHeader className="pb-3">
+           <CardTitle className="flex items-center gap-2 text-base md:text-lg">
+-            <AlertTriangle className="h-5 w-5" />
++            <AlertTriangle className={cn("h-5 w-5", alerts.length > 0 ? "text-amber-600" : "text-muted-foreground")} />
+             Expiration Alerts
+           </CardTitle>
+         </CardHeader>
+         <CardContent>
+-          <p className="text-xs md:text-sm text-muted-foreground">No items expiring soon</p>
++          {alerts.length === 0 ? (
++            <div className="flex flex-col items-center gap-2 py-6 text-center">
++              {hadItemsInitially ? (
++                <>
++                  <PartyPopper className="h-7 w-7 text-primary" />
++                  <p className="text-sm font-medium">All caught up!</p>
++                  <p className="text-xs text-muted-foreground">Nothing left expiring soon.</p>
++                </>
++              ) : (
++                <p className="text-xs md:text-sm text-muted-foreground">No items expiring soon</p>
++              )}
++            </div>
++          ) : (
++            <div className="space-y-2">
++              <AnimatePresence initial={false}>
++                {visible.map((item) => {
++                  const style = URGENCY_STYLES[item.urgency]
++                  const isPending = pendingIds.has(item.id)
++                  return (
++                    <motion.div
++                      key={item.id}
++                      layout
++                      initial={{ opacity: 0, y: -8 }}
++                      animate={{ opacity: 1, y: 0 }}
++                      exit={{ opacity: 0, x: 32, height: 0, marginBottom: 0 }}
++                      transition={{ type: "spring", stiffness: 340, damping: 30 }}
++                      className="rounded-lg border p-2.5 md:p-3"
++                    >
++                      <div className="flex items-start gap-2.5">
++                        <span
++                          className={cn(
++                            "flex h-9 w-9 shrink-0 flex-col items-center justify-center rounded-lg text-xs font-bold tabular-nums leading-none",
++                            style.badge,
++                          )}
++                          aria-hidden="true"
++                        >
++                          {item.daysUntil < 0 ? "!" : Math.abs(item.daysUntil)}
++                          {item.daysUntil >= 0 && <span className="text-[9px] font-medium">days</span>}
++                        </span>
++
++                        <div className="min-w-0 flex-1">
++                          <div className="flex items-start justify-between gap-2">
++                            <p className="truncate text-sm font-medium md:text-base">{item.name}</p>
++                            <span
++                              className={cn(
++                                "shrink-0 whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-medium",
++                                style.pill,
++                              )}
++                            >
++                              {item.pillLabel}
++                            </span>
++                          </div>
++                          <p className="text-xs text-muted-foreground">
++                            {item.quantity} {item.unit}
++                          </p>
++
++                          <div className="mt-2 flex gap-2">
++                            <Button
++                              type="button"
++                              size="sm"
++                              variant="outline"
++                              className="h-7 flex-1 text-xs"
++                              onClick={() => handleUseInRecipe(item)}
++                            >
++                              <ChefHat className="h-3 w-3" />
++                              Use in recipe
++                            </Button>
++                            <Button
++                              type="button"
++                              size="sm"
++                              variant="outline"
++                              className="h-7 flex-1 text-xs"
++                              disabled={isPending}
++                              onClick={() => handleMarkUsed(item)}
++                            >
++                              <Check className="h-3 w-3" />
++                              Mark used
++                            </Button>
++                          </div>
++                        </div>
++                      </div>
++                    </motion.div>
++                  )
++                })}
++              </AnimatePresence>
++              {overflow > 0 && (
++                <p className="pt-1 text-center text-xs text-muted-foreground">+{overflow} more expiring soon</p>
++              )}
++            </div>
++          )}
+         </CardContent>
+       </Card>
+-    )
+-  }
+-
+-  return (
+-    <Card>
+-      <CardHeader className="pb-3">
+-        <CardTitle className="flex items-center gap-2 text-base md:text-lg">
+-          <AlertTriangle className="h-5 w-5 text-amber-600" />
+-          Expiration Alerts
+-        </CardTitle>
+-      </CardHeader>
+-      <CardContent>
+-        <div className="space-y-2 md:space-y-3">
+-          {items.slice(0, 5).map((item) => {
+-            const expirationDate = new Date(item.expiration_date!)
+-            const isExpired = expirationDate < new Date()
+-
+-            return (
+-              <div key={item.id} className="flex items-start gap-2 text-xs md:text-sm">
+-                <Calendar className={`h-4 w-4 mt-0.5 flex-shrink-0 ${isExpired ? "text-red-500" : "text-amber-500"}`} />
+-                <div className="min-w-0">
+-                  <p className="font-medium truncate">{item.name}</p>
+-                  <p className={`text-xs ${isExpired ? "text-red-600" : "text-amber-600"}`}>
+-                    {isExpired ? "Expired" : "Expires"} {formatDistanceToNow(expirationDate, { addSuffix: true })}
+-                  </p>
+-                </div>
+-              </div>
+-            )
+-          })}
+-        </div>
+-      </CardContent>
+-    </Card>
++    </MotionConfig>
+   )
+ }
+diff --git a/components/recipes/recipe-generator.tsx b/components/recipes/recipe-generator.tsx
+index 523ff8f..9c85636 100644
+--- a/components/recipes/recipe-generator.tsx
++++ b/components/recipes/recipe-generator.tsx
+@@ -20,6 +20,8 @@ interface RecipeGeneratorProps {
+   pantryItems: PantryItem[]
+   dietaryRestrictions: string[]
+   userId: string
++  /** Prefills the "Special Requests" box, e.g. when arriving from the dashboard's "Use in recipe" button. */
++  initialRequest?: string
+ }
+ 
+ interface GeneratedRecipe {
+@@ -35,10 +37,10 @@ interface GeneratedRecipe {
+   tags: string[]
+ }
+ 
+-export function RecipeGenerator({ pantryItems, dietaryRestrictions, userId }: RecipeGeneratorProps) {
++export function RecipeGenerator({ pantryItems, dietaryRestrictions, userId, initialRequest }: RecipeGeneratorProps) {
+   const [isGenerating, setIsGenerating] = useState(false)
+   const [generatedRecipe, setGeneratedRecipe] = useState<GeneratedRecipe | null>(null)
+-  const [customRequest, setCustomRequest] = useState("")
++  const [customRequest, setCustomRequest] = useState(initialRequest || "")
+   const [isSaving, setIsSaving] = useState(false)
+ 
+   const handleGenerate = async () => {
+diff --git a/lib/pantry-stats.ts b/lib/pantry-stats.ts
+index 627e627..cfc636d 100644
+--- a/lib/pantry-stats.ts
++++ b/lib/pantry-stats.ts
+@@ -1,3 +1,5 @@
++import { differenceInCalendarDays, parseISO } from "date-fns"
++
+ export interface StatsItem {
+   quantity: number | string
+   price?: number | string | null
+@@ -33,6 +35,17 @@ export interface PantryStats {
+   pantryValue: number
+ }
+ 
++/**
++ * Calendar-day difference between a date-only string (e.g. "2026-09-22") and
++ * `now`, using `parseISO` so the string is read as *local* midnight instead of
++ * `new Date()`'s UTC-midnight parsing — the bug documented in the dashboard
++ * header (a US viewer would otherwise see dates a day early). Negative means
++ * already past.
++ */
++function daysUntil(expirationDate: string, now: Date): number {
++  return differenceInCalendarDays(parseISO(expirationDate), now)
++}
++
+ /**
+  * Compute all dashboard numbers in one place so the header and the stat tiles
+  * can never disagree. Call this from a server component and pass the result
+@@ -48,7 +61,7 @@ export function getPantryStats(items: StatsItem[], expiringItems: StatsItem[]):
+   const now = new Date()
+ 
+   const expired = expiringItems.filter(
+-    (item) => item.expiration_date && new Date(item.expiration_date) < now,
++    (item) => item.expiration_date && daysUntil(item.expiration_date, now) < 0,
+   ).length
+ 
+   let pricedItems = 0
+@@ -90,3 +103,57 @@ export function getCategoryBreakdown(items: CategoryItem[]): CategorySlice[] {
+     .map(([category, count]) => ({ category, count, share: count / total }))
+     .sort((a, b) => b.count - a.count)
+ }
++
++export type ExpirationUrgency = "expired" | "critical" | "warning" | "notice"
++
++/**
++ * An expiring item enriched with everything the alerts card needs to render
++ * and to act on: `daysUntil` (negative once past), an `urgency` tier for
++ * color-coding, and a ready-to-display `pillLabel`. Generic over `T` so the
++ * full pantry_items row (needed to re-insert on "Undo") passes straight
++ * through untouched — nothing here drops fields.
++ */
++export type ExpirationAlert<T extends { expiration_date: string | null }> = T & {
++  expiration_date: string
++  daysUntil: number
++  urgency: ExpirationUrgency
++  pillLabel: string
++}
++
++/**
++ * Enrich expiring items with a calendar-day count and urgency tier, computed
++ * once on the server (like getPantryStats) so the client card never runs its
++ * own `Date`/"now" logic — that's exactly the class of bug documented for the
++ * dashboard header. Sorted soonest-expiring (most negative daysUntil) first.
++ */
++export function getExpirationAlerts<T extends { expiration_date: string | null }>(items: T[]): ExpirationAlert<T>[] {
++  const now = new Date()
++
++  return items
++    .filter((item): item is T & { expiration_date: string } => Boolean(item.expiration_date))
++    .map((item) => {
++      const days = daysUntil(item.expiration_date, now)
++      let urgency: ExpirationUrgency
++      let pillLabel: string
++
++      if (days < 0) {
++        urgency = "expired"
++        pillLabel = days === -1 ? "Expired yesterday" : `Expired ${Math.abs(days)}d ago`
++      } else if (days === 0) {
++        urgency = "critical"
++        pillLabel = "Expires today"
++      } else if (days === 1) {
++        urgency = "critical"
++        pillLabel = "Expires tomorrow"
++      } else if (days <= 3) {
++        urgency = "warning"
++        pillLabel = `${days} days left`
++      } else {
++        urgency = "notice"
++        pillLabel = `${days} days left`
++      }
++
++      return { ...item, daysUntil: days, urgency, pillLabel }
++    })
++    .sort((a, b) => a.daysUntil - b.daysUntil)
++}

@@ -20,6 +20,8 @@ interface RecipeGeneratorProps {
   pantryItems: PantryItem[]
   dietaryRestrictions: string[]
   userId: string
+  /** Prefills the "Special Requests" box, e.g. when arriving from the dashboard's "Use in recipe" button. */
+  initialRequest?: string
 }
 
 interface GeneratedRecipe {
@@ -35,10 +37,10 @@ interface GeneratedRecipe {
   tags: string[]
 }
 
-export function RecipeGenerator({ pantryItems, dietaryRestrictions, userId }: RecipeGeneratorProps) {
+export function RecipeGenerator({ pantryItems, dietaryRestrictions, userId, initialRequest }: RecipeGeneratorProps) {
   const [isGenerating, setIsGenerating] = useState(false)
   const [generatedRecipe, setGeneratedRecipe] = useState<GeneratedRecipe | null>(null)
-  const [customRequest, setCustomRequest] = useState("")
+  const [customRequest, setCustomRequest] = useState(initialRequest || "")
   const [isSaving, setIsSaving] = useState(false)
 
   const handleGenerate = async () => {

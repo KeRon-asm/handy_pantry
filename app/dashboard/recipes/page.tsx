@@ -6,9 +6,14 @@ import { RecipesHeader } from "@/components/recipes/recipes-header"
 import { RecipesList } from "@/components/recipes/recipes-list"
 import { RecipeGenerator } from "@/components/recipes/recipe-generator"
 
-export default async function RecipesPage() {
+export default async function RecipesPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ use?: string }>
+}) {
   const { user, profile, displayName } = await getUserProfile()
   const adminSupabase = createAdminClient()
+  const { use } = await searchParams
 
   const [{ data: recipes }, { data: pantryItems }] = await Promise.all([
     adminSupabase.from("recipes").select("*").eq("user_id", user.id).order("created_at", { ascending: false }),
@@ -22,6 +27,7 @@ export default async function RecipesPage() {
         pantryItems={pantryItems || []}
         dietaryRestrictions={profile?.dietary_restrictions || []}
         userId={user.id}
+        initialRequest={use ? `Use up my ${use}` : undefined}
       />
       <RecipesList initialRecipes={recipes || []} />
     </DashboardShell>

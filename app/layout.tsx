@@ -2,6 +2,7 @@ import type React from "react"
 import type { Metadata, Viewport } from "next"
 import { Geist, Geist_Mono } from "next/font/google"
 import { Analytics } from "@vercel/analytics/next"
+import { Toaster } from "sonner"
 import "./globals.css"
 
 const _geist = Geist({ subsets: ["latin"] })
@@ -50,6 +51,9 @@ export default function RootLayout({
     <html lang="en">
       <body className={`font-sans antialiased touch-manipulation`}>
         {children}
+        {/* Mounted once, app-wide: every existing toast.*() call in the app (12
+            files already call it) had nowhere to render without this. */}
+        <Toaster richColors closeButton position="bottom-right" theme="system" />
         <Analytics />
       </body>
     </html>
