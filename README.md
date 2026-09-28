@@ -4,7 +4,7 @@ A collaborative household pantry tracker that helps you avoid food waste, duplic
 
 ## Overview
 
-Handy Pantry is a virtual representation of your home pantry. It lets household members collectively view, add, and track what they have, need, and are running low on — reducing food waste, saving money, and making grocery trips less stressful.
+Handy Pantry is a virtual representation of your home pantry. It lets household members collectively view, add, and track what they have, need, and are running low on, reducing food waste, saving money, and making grocery trips less stressful.
 
 ## Tech Stack
 
@@ -28,7 +28,7 @@ Handy Pantry is a virtual representation of your home pantry. It lets household 
 - Shopping trends and analytics
 
 **AI Tools**
-- Receipt scanning — scan a grocery receipt to auto-populate pantry items
+- Receipt scanning: scan a grocery receipt to auto-populate pantry items
 - Recipe suggestions based on current inventory and dietary restrictions
 - Voice input for hands-free item entry
 
